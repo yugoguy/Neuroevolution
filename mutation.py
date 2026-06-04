@@ -58,14 +58,14 @@ def mutate_add_connection(
     max_tries: int,
 ) -> None:
     """Add one feed-forward connection between two currently unlinked nodes."""
-    node_ids = list(genome.node_genes)
+    sources = [n for n, g in genome.node_genes.items() if g.type != OUTPUT]
     targets = [n for n, g in genome.node_genes.items() if g.type in (HIDDEN, OUTPUT)]
-    if not targets:
+    if not targets or not sources:
         return
     existing = {(c.in_node, c.out_node) for c in genome.conn_genes.values()}
 
     for _ in range(max_tries):
-        a = int(rng.choice(node_ids))
+        a = int(rng.choice(sources))
         b = int(rng.choice(targets))
         if a == b or (a, b) in existing:
             continue
