@@ -74,6 +74,7 @@ class Config:
     # --- Evaluation ---
     max_steps: int = 1000                  # episode length (lower => faster generations)
     episodes_per_genome: int = 1           # rollouts averaged per genome (>1 => less noisy, N x slower)
+    eval_batch_size: int = 0               # rollouts (genome x episode) run at once; 0 = all in one batch
     eval_test_mode: bool = False           # False: full-horizon score margin; True: real 5-life match
     survival_weight: float = 0.0           # + w * (steps_survived / max_steps); only meaningful in test mode
     action_threshold: float = 0.0          # action = (output > threshold)
