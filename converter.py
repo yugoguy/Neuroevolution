@@ -97,7 +97,9 @@ def express(
     for nid, node in genome.node_genes.items():
         s = slot[nid]
         mask[s] = 1.0
-        act_ids[s] = act_to_id[node.activation]
+        # Input/bias values are clamped every pass, so their activation is never
+        # applied; give them id 0 instead of requiring it to be in the set.
+        act_ids[s] = 0 if node.type == INPUT else act_to_id[node.activation]
 
     for c in genome.conn_genes.values():
         if c.enabled:
