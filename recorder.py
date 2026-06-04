@@ -15,7 +15,7 @@ from dataclasses import asdict
 
 import numpy as np
 
-from genome import Genome, NodeGene, ConnGene, HIDDEN, OUTPUT
+from genome import Genome, NodeGene, ConnGene, HIDDEN
 from graph_utils import max_depth
 
 
@@ -26,9 +26,9 @@ def _dist(values) -> dict:
 
 
 def _activation_counts(genome: Genome) -> Counter:
-    """Activation usage over the genome's hidden and output nodes."""
+    """Activation usage over the genome's hidden nodes (outputs are fixed)."""
     return Counter(
-        g.activation for g in genome.node_genes.values() if g.type in (HIDDEN, OUTPUT)
+        g.activation for g in genome.node_genes.values() if g.type == HIDDEN
     )
 
 
@@ -43,6 +43,7 @@ class Recorder:
     def __init__(self):
         self.records: list[dict] = []
         self.best_snapshots: dict[int, dict] = {}   # gen -> asdict(best genome)
+        self.species_best_snapshots: dict[int, dict] = {}  # gen -> {species_id: asdict(species best)}
         self._prev_species: set = set()
         self._best_fitness = -np.inf
         self._stagnation = 0
@@ -64,6 +65,7 @@ class Recorder:
         # Species dynamics.
         sizes = Counter(assignment)
         species_fit = {}
+        species_best = {}
         for sid in sizes:
             idxs = [i for i, s in enumerate(assignment) if s == sid]
             species_fit[sid] = {
@@ -71,6 +73,9 @@ class Recorder:
                 "mean": float(f[idxs].mean()),
                 "max": float(f[idxs].max()),
             }
+            best_idx = max(idxs, key=lambda i: f[i])
+            species_best[sid] = asdict(pop[best_idx])
+        self.species_best_snapshots[gen] = species_best
         cur_species = set(sizes)
         new_species = len(cur_species - self._prev_species)
         extinct = len(self._prev_species - cur_species)
@@ -126,7 +131,8 @@ class Recorder:
     def dump_json(self, path: str) -> None:
         with open(path, "w") as fh:
             json.dump({"records": self.records,
-                       "best_snapshots": self.best_snapshots}, fh)
+                       "best_snapshots": self.best_snapshots,
+                       "species_best_snapshots": self.species_best_snapshots}, fh)
 
     def dump_pickle(self, path: str) -> None:
         with open(path, "wb") as fh:
