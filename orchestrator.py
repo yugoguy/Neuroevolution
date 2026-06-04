@@ -75,6 +75,7 @@ def evolve(config: Config, callback=None):
                 episodes=config.episodes_per_genome,
                 action_threshold=config.action_threshold,
                 survival_weight=config.survival_weight,
+                batch_size=config.eval_batch_size,
             )
         )
 
