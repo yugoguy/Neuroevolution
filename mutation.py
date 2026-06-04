@@ -115,9 +115,8 @@ def mutate_activation(
     rng: np.random.Generator,
     activation_names: list[str],
 ) -> None:
-    """Reassign the activation of a random hidden/output node."""
-    candidates = [n for n, g in genome.node_genes.items()
-                  if g.type in (HIDDEN, OUTPUT)]
+    """Reassign the activation of a random hidden node (outputs stay fixed)."""
+    candidates = [n for n, g in genome.node_genes.items() if g.type == HIDDEN]
     if not candidates or not activation_names:
         return
     nid = int(rng.choice(candidates))
