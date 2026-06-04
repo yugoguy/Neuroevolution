@@ -33,9 +33,7 @@ class Config:
     # num_passes: synchronous propagation steps. Correctness needs it >= longest
     # path; n_max is always safe. 32 exceeds expected depth here, well below n_max.
     num_passes: int = 32
-    activation_names: tuple[str, ...] = (
-        "identity", "tanh", "relu", "sigmoid", "sin", "gauss", "abs",
-    )
+    activation_names: tuple[str, ...] = ("tanh", "relu", "sigmoid", "sin")
     output_activation: str = "tanh"
     new_node_activation: str = "random"   # "random" => sample from activation_names; else a name
 
