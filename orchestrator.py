@@ -95,13 +95,21 @@ def evolve(config: Config, callback=None):
             callback(rec)
         elif config.verbose:
             acc = rec.get("accuracy", {})
+            sp, cx, b = rec["species"], rec["complexity"], rec["best"]
+            if gen == 0:
+                print(f"[{config.dataset}]  "
+                      "gen |    fit max    mean |  acc best tr/te | mean te | "
+                      "species (new/ext,max) | best h/c/d | pop h/c | stag |  time")
             print(
-                f"gen {rec['gen']:3d} | fit {rec['fitness']['max']:7.3f} "
-                f"| acc tr {acc.get('train_best', 0):.3f} te {acc.get('test_best', 0):.3f} "
-                f"| species {rec['species']['count']:2d} "
-                f"| hidden {rec['complexity']['hidden']['mean']:4.1f} "
-                f"conns {rec['complexity']['enabled_conns']['mean']:5.1f} "
-                f"| {rec['gen_time_s']:5.1f}s"
+                f"      {rec['gen']:4d} | "
+                f"{rec['fitness']['max']:8.3f} {rec['fitness']['mean']:7.3f} | "
+                f"     {acc.get('train_best', 0):.2f}/{acc.get('test_best', 0):.2f} | "
+                f"  {acc.get('test_mean', 0):.2f} | "
+                f"{sp['count']:5d} (+{sp['new']} -{sp['extinct']}, {sp['largest']:>2}) | "
+                f"{b['hidden']:3d}/{b['enabled_conns']:3d}/{b['depth']:2d} | "
+                f"{cx['hidden']['mean']:4.1f}/{cx['enabled_conns']['mean']:5.1f} | "
+                f"{rec['stagnation']:4d} | "
+                f"{rec['gen_time_s']:5.1f}s"
             )
 
         # --- Reproduce ---
