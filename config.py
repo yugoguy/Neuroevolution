@@ -33,6 +33,7 @@ class Config:
     n_max: int = 32                # per-genome node budget == converter tensor width
     seed: int = 0
     verbose: bool = True
+    print_top_species: int = 3     # per gen, show this many top species' best structure (0 = off)
 
     # --- Network / forward pass ---
     # num_passes: synchronous propagation steps. Correctness needs it >= longest
