@@ -58,7 +58,7 @@ inherit_from_fitter_prob = 0.5   #@param {type:"number"}
 interspecies_mating_prob = 0.001 #@param {type:"number"}
 
 #@markdown ### Speciation
-compat_threshold = 0.5    #@param {type:"number"}
+compat_threshold = 0.75    #@param {type:"number"}
 c_unmatched = 1.0         #@param {type:"number"}
 c_weight = 0.4            #@param {type:"number"}
 normalize_threshold = 0  #@param {type:"integer"}
@@ -113,6 +113,39 @@ best, rec = evolve(cfg)
 rec.dump_json("history.json")
 print("best fitness:", rec.records[-1]["best"]["fitness"])
 print("best test acc:", rec.records[-1].get("accuracy", {}).get("test_best"))
+
+# %% Top-species report (reconstructed from the recorder, so it always prints
+# regardless of what orchestrator version produced the run). For the requested
+# generations it lists, per top species, the BEST genome's fitness, size,
+# structure (hidden / connections / depth) and which activations it uses.
+from collections import Counter
+from recorder import load_genome
+from graph_utils import max_depth
+
+def species_report(gen, top_k=6):
+    r = rec.records[gen]
+    sfit = {int(s): v for s, v in r["species"]["fitness"].items()}     # {sid:{size,mean,max}}
+    snaps = {int(s): g for s, g in rec.species_best_snapshots.get(gen, {}).items()}
+    order = sorted(sfit, key=lambda s: sfit[s]["max"], reverse=True)[:top_k]
+    acc = r.get("accuracy", {})
+    print(f"\n=== gen {gen:>3} | {r['species']['count']} species "
+          f"| pop best fit {r['fitness']['max']:.3f} "
+          f"(train {acc.get('train_best', 0):.3f} / test {acc.get('test_best', 0):.3f}) ===")
+    print(f"{'rank':>4}  {'sp':>4}  {'best fit':>9}  {'size':>4}  "
+          f"{'hid':>3}  {'conn':>4}  {'dep':>3}  activations")
+    for rank, sid in enumerate(order, 1):
+        st = sfit[sid]
+        g = load_genome(snaps[sid])
+        hid = [n for n in g.node_genes.values() if n.type == "hidden"]
+        conns = sum(c.enabled for c in g.conn_genes.values())
+        acts = Counter(n.activation for n in hid)
+        acts_str = ", ".join(f"{a}x{k}" for a, k in acts.most_common()) or "(none)"
+        print(f"{rank:>4}  {sid:>4}  {st['max']:>9.3f}  {st['size']:>4}  "
+              f"{len(hid):>3}  {conns:>4}  {max_depth(g):>3}  {acts_str}")
+
+last = len(rec.records) - 1
+for gi in sorted({0, last // 2, last}):
+    species_report(gi)
 
 # %% Fitness / accuracy / complexity / species over generations
 import matplotlib.pyplot as plt
