@@ -11,6 +11,7 @@ The GA evolves topology only; backprop fits the weights inside each evaluation.
 from __future__ import annotations
 
 import time
+from collections import Counter
 
 import numpy as np
 
@@ -26,6 +27,8 @@ from recorder import Recorder
 from converter import express, stack_models, write_back, activation_ids, activation_fns
 from train import train_and_score
 from dataset import make_dataset
+from graph_utils import max_depth
+from genome import HIDDEN
 
 
 def evolve(config: Config, callback=None):
@@ -111,6 +114,24 @@ def evolve(config: Config, callback=None):
                 f"{rec['stagnation']:4d} | "
                 f"{rec['gen_time_s']:5.1f}s"
             )
+            if config.print_top_species:
+                members: dict[int, list[int]] = {}
+                for i, s in enumerate(assignment):
+                    members.setdefault(s, []).append(i)
+                top = sorted(members,
+                             key=lambda s: max(fitnesses[i] for i in members[s]),
+                             reverse=True)[:config.print_top_species]
+                for s in top:
+                    bi = max(members[s], key=lambda i: fitnesses[i])
+                    g = pop[bi]
+                    h = sum(1 for n in g.node_genes.values() if n.type == HIDDEN)
+                    c = sum(1 for cc in g.conn_genes.values() if cc.enabled)
+                    acts = Counter(n.activation for n in g.node_genes.values()
+                                   if n.type == HIDDEN)
+                    acts_str = " ".join(f"{a}:{k}" for a, k in acts.most_common()) or "-"
+                    print(f"           sp {s:>3}: fit {fitnesses[bi]:8.3f} "
+                          f"size {len(members[s]):3d} | h {h:2d} c {c:3d} d {max_depth(g):2d} "
+                          f"| {acts_str}")
 
         # --- Reproduce ---
         allowed = stagnation.update(gen, assignment, fitnesses)
