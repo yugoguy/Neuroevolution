@@ -3,11 +3,13 @@
 # NEAT evolves topology; backprop (Adam) fits the weights of each network.
 # Runtime > Change runtime type > GPU is optional (small problems run on CPU too).
 
-# %% Install dependencies
-!pip -q install --upgrade "jax[cpu]" matplotlib
-# For GPU Colab, jax is preinstalled; the line above is a no-op fallback for CPU.
+# %% Confirm JAX sees a device.
+# Colab ships JAX preinstalled and version-matched on a FRESH runtime — do not
+# reinstall/upgrade jax (that causes the PJRT "expected 48, got 40" mismatch).
+# If you ever hit that error, just Runtime > Disconnect and delete runtime, then
+# run from the top.
 import jax
-print("devices:", jax.devices())
+print("devices:", jax.devices())   # CudaDevice on GPU runtime, else CPU
 
 # %% Clone the library (BackpropNEAT branch) and make it importable
 !rm -rf Neuroevolution
@@ -17,25 +19,58 @@ sys.path.append("/content/Neuroevolution")
 
 # %% Hyperparameters
 #@markdown ### Task
-dataset = "spiral"        #@param ["circle", "xor", "spiral"]
+dataset = "xor"        #@param ["circle", "xor", "spiral"]
 n_train = 250             #@param {type:"integer"}
 n_test = 250              #@param {type:"integer"}
-noise = 0.5               #@param {type:"number"}
+noise = 0.1               #@param {type:"number"}
 
 #@markdown ### Run
 pop_size = 120            #@param {type:"integer"}
-num_generations = 60      #@param {type:"integer"}
+num_generations = 20      #@param {type:"integer"}
 n_max = 32                #@param {type:"integer"}
 seed = 0                  #@param {type:"integer"}
 
 #@markdown ### Backprop inner loop
-backprop_steps = 200      #@param {type:"integer"}
-learning_rate = 0.05      #@param {type:"number"}
+backprop_steps = 100      #@param {type:"integer"}
+learning_rate = 0.01      #@param {type:"number"}
 num_passes = 32           #@param {type:"integer"}
 
 #@markdown ### Complexity penalty
 penalty_conn = 0.01       #@param {type:"number"}
 penalty_node = 0.0        #@param {type:"number"}
+
+#@markdown ### Initialization
+weight_init_std = 0.5     #@param {type:"number"}
+
+#@markdown ### Mutation (structural ops are NEAT's; weight mutation only jitters the backprop warm-start)
+p_weight = 0.2            #@param {type:"number"}
+perturb_std = 0.1         #@param {type:"number"}
+replace_prob = 0.05       #@param {type:"number"}
+p_add_connection = 0.3    #@param {type:"number"}
+p_add_node = 0.15         #@param {type:"number"}
+p_activation = 0.1        #@param {type:"number"}
+add_conn_max_tries = 20   #@param {type:"integer"}
+new_node_activation = "random"  #@param ["random", "tanh", "relu", "sigmoid", "sin", "gauss", "abs", "square"]
+
+#@markdown ### Crossover
+reenable_prob = 0.25             #@param {type:"number"}
+inherit_from_fitter_prob = 0.5   #@param {type:"number"}
+interspecies_mating_prob = 0.001 #@param {type:"number"}
+
+#@markdown ### Speciation
+compat_threshold = 0.5    #@param {type:"number"}
+c_unmatched = 1.0         #@param {type:"number"}
+c_weight = 0.4            #@param {type:"number"}
+normalize_threshold = 0  #@param {type:"integer"}
+rep_selection = "random"  #@param ["random", "first"]
+
+#@markdown ### Reproduction
+survival_threshold = 0.3        #@param {type:"number"}
+elitism_min_species_size = 5    #@param {type:"integer"}
+mutate_only_prob = 0.25         #@param {type:"number"}
+parent_selection = "uniform"    #@param ["uniform", "fitness_weighted"]
+max_stagnation = 15             #@param {type:"integer"}
+population_stall = 20           #@param {type:"integer"}
 
 from config import Config
 cfg = Config(
@@ -43,6 +78,17 @@ cfg = Config(
     pop_size=pop_size, num_generations=num_generations, n_max=n_max, seed=seed,
     backprop_steps=backprop_steps, learning_rate=learning_rate, num_passes=num_passes,
     penalty_conn=penalty_conn, penalty_node=penalty_node,
+    weight_init_std=weight_init_std,
+    p_weight=p_weight, perturb_std=perturb_std, replace_prob=replace_prob,
+    p_add_connection=p_add_connection, p_add_node=p_add_node, p_activation=p_activation,
+    add_conn_max_tries=add_conn_max_tries, new_node_activation=new_node_activation,
+    reenable_prob=reenable_prob, inherit_from_fitter_prob=inherit_from_fitter_prob,
+    interspecies_mating_prob=interspecies_mating_prob,
+    compat_threshold=compat_threshold, c_unmatched=c_unmatched, c_weight=c_weight,
+    normalize_threshold=normalize_threshold, rep_selection=rep_selection,
+    survival_threshold=survival_threshold, elitism_min_species_size=elitism_min_species_size,
+    mutate_only_prob=mutate_only_prob, parent_selection=parent_selection,
+    max_stagnation=max_stagnation, population_stall=population_stall,
 )
 
 # %% Visualize the dataset first (same RNG sequence evolve uses, so this is the
