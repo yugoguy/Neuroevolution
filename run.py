@@ -46,6 +46,22 @@ cfg = Config(
     penalty_conn=penalty_conn, penalty_node=penalty_node,
 )
 
+# %% Visualize the dataset first (same RNG sequence evolve uses, so this is the
+# actual train/test split the networks are scored on)
+import numpy as np
+import matplotlib.pyplot as plt
+from dataset import make_dataset
+_drng = np.random.default_rng(cfg.seed + 1)
+Xtr, ytr = make_dataset(cfg.dataset, cfg.n_train, _drng, cfg.noise)
+Xte, yte = make_dataset(cfg.dataset, cfg.n_test, _drng, cfg.noise)
+fig, axd = plt.subplots(1, 2, figsize=(10, 5))
+for a, (X, y, name) in zip(axd, [(Xtr, ytr, "train"), (Xte, yte, "test")]):
+    a.scatter(X[y == 0, 0], X[y == 0, 1], s=10, c="tab:red", edgecolors="none")
+    a.scatter(X[y == 1, 0], X[y == 1, 1], s=10, c="tab:blue", edgecolors="none")
+    a.set_title(f"{cfg.dataset} — {name} (n={len(y)}, noise={cfg.noise})")
+    a.set_aspect("equal"); a.set_xticks([]); a.set_yticks([])
+plt.tight_layout(); plt.show()
+
 # %% Run evolution (first generation is slow due to JIT compilation)
 from orchestrator import evolve
 best, rec = evolve(cfg)
