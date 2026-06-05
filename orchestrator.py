@@ -1,201 +1,169 @@
-# %% [markdown]
-# Backprop NEAT on 2D classification (circle / XOR / spiral) — Colab runner.
-# NEAT evolves topology; backprop (Adam) fits the weights of each network.
-# Runtime > Change runtime type > GPU is optional (small problems run on CPU too).
+"""Orchestrator: the Backprop NEAT evolution loop.
 
-# %% Confirm JAX sees a device.
-# Colab ships JAX preinstalled and version-matched on a FRESH runtime — do not
-# reinstall/upgrade jax (that causes the PJRT "expected 48, got 40" mismatch).
-# If you ever hit that error, just Runtime > Disconnect and delete runtime, then
-# run from the top.
-import jax
-print("devices:", jax.devices())   # CudaDevice on GPU runtime, else CPU
+Per generation:
+  express + stack -> train weights (backprop) + score -> write trained weights
+  back into genomes (Lamarckian) -> log/track best -> speciate -> advance
+  innovation generation -> reproduce.
 
-# %% Clone the library (BackpropNEAT branch) and make it importable
-!rm -rf Neuroevolution
-!git clone -b BackpropNEAT https://github.com/yugoguy/Neuroevolution.git
-import sys
-sys.path.append("/content/Neuroevolution")
+The GA evolves topology only; backprop fits the weights inside each evaluation.
+"""
 
-# %% Hyperparameters
-#@markdown ### Task
-dataset = "xor"        #@param ["circle", "xor", "spiral"]
-n_train = 250             #@param {type:"integer"}
-n_test = 250              #@param {type:"integer"}
-noise = 0.1               #@param {type:"number"}
+from __future__ import annotations
 
-#@markdown ### Run
-pop_size = 120            #@param {type:"integer"}
-num_generations = 20      #@param {type:"integer"}
-n_max = 32                #@param {type:"integer"}
-seed = 0                  #@param {type:"integer"}
+import time
+from collections import Counter
 
-#@markdown ### Backprop inner loop
-backprop_steps = 100      #@param {type:"integer"}
-learning_rate = 0.01      #@param {type:"number"}
-num_passes = 32           #@param {type:"integer"}
-
-#@markdown ### Complexity penalty
-penalty_conn = 0.01       #@param {type:"number"}
-penalty_node = 0.0        #@param {type:"number"}
-
-#@markdown ### Initialization
-weight_init_std = 0.5     #@param {type:"number"}
-
-#@markdown ### Mutation (structural ops are NEAT's; weight mutation only jitters the backprop warm-start)
-p_weight = 0.2            #@param {type:"number"}
-perturb_std = 0.1         #@param {type:"number"}
-replace_prob = 0.05       #@param {type:"number"}
-p_add_connection = 0.3    #@param {type:"number"}
-p_add_node = 0.15         #@param {type:"number"}
-p_activation = 0.1        #@param {type:"number"}
-add_conn_max_tries = 20   #@param {type:"integer"}
-new_node_activation = "random"  #@param ["random", "tanh", "relu", "sigmoid", "sin", "gauss", "abs", "square"]
-
-#@markdown ### Crossover
-reenable_prob = 0.25             #@param {type:"number"}
-inherit_from_fitter_prob = 0.5   #@param {type:"number"}
-interspecies_mating_prob = 0.001 #@param {type:"number"}
-
-#@markdown ### Speciation
-compat_threshold = 0.5    #@param {type:"number"}
-c_unmatched = 1.0         #@param {type:"number"}
-c_weight = 0.4            #@param {type:"number"}
-normalize_threshold = 0  #@param {type:"integer"}
-rep_selection = "random"  #@param ["random", "first"]
-
-#@markdown ### Reproduction
-survival_threshold = 0.3        #@param {type:"number"}
-elitism_min_species_size = 5    #@param {type:"integer"}
-mutate_only_prob = 0.25         #@param {type:"number"}
-parent_selection = "uniform"    #@param ["uniform", "fitness_weighted"]
-max_stagnation = 15             #@param {type:"integer"}
-population_stall = 20           #@param {type:"integer"}
+import numpy as np
 
 from config import Config
-cfg = Config(
-    dataset=dataset, n_train=n_train, n_test=n_test, noise=noise,
-    pop_size=pop_size, num_generations=num_generations, n_max=n_max, seed=seed,
-    backprop_steps=backprop_steps, learning_rate=learning_rate, num_passes=num_passes,
-    penalty_conn=penalty_conn, penalty_node=penalty_node,
-    weight_init_std=weight_init_std,
-    p_weight=p_weight, perturb_std=perturb_std, replace_prob=replace_prob,
-    p_add_connection=p_add_connection, p_add_node=p_add_node, p_activation=p_activation,
-    add_conn_max_tries=add_conn_max_tries, new_node_activation=new_node_activation,
-    reenable_prob=reenable_prob, inherit_from_fitter_prob=inherit_from_fitter_prob,
-    interspecies_mating_prob=interspecies_mating_prob,
-    compat_threshold=compat_threshold, c_unmatched=c_unmatched, c_weight=c_weight,
-    normalize_threshold=normalize_threshold, rep_selection=rep_selection,
-    survival_threshold=survival_threshold, elitism_min_species_size=elitism_min_species_size,
-    mutate_only_prob=mutate_only_prob, parent_selection=parent_selection,
-    max_stagnation=max_stagnation, population_stall=population_stall,
-)
-
-# %% Visualize the dataset first (same RNG sequence evolve uses, so this is the
-# actual train/test split the networks are scored on)
-import numpy as np
-import matplotlib.pyplot as plt
+from innovation import InnovationRegistry
+from init_population import init_population
+from mutation import mutate
+from crossover import crossover
+from speciation import speciate
+from reproduction import reproduce
+from stagnation import StagnationTracker
+from recorder import Recorder
+from converter import express, stack_models, write_back, activation_ids, activation_fns
+from train import train_and_score
 from dataset import make_dataset
-_drng = np.random.default_rng(cfg.seed + 1)
-Xtr, ytr = make_dataset(cfg.dataset, cfg.n_train, _drng, cfg.noise)
-Xte, yte = make_dataset(cfg.dataset, cfg.n_test, _drng, cfg.noise)
-fig, axd = plt.subplots(1, 2, figsize=(10, 5))
-for a, (X, y, name) in zip(axd, [(Xtr, ytr, "train"), (Xte, yte, "test")]):
-    a.scatter(X[y == 0, 0], X[y == 0, 1], s=10, c="tab:red", edgecolors="none")
-    a.scatter(X[y == 1, 0], X[y == 1, 1], s=10, c="tab:blue", edgecolors="none")
-    a.set_title(f"{cfg.dataset} — {name} (n={len(y)}, noise={cfg.noise})")
-    a.set_aspect("equal"); a.set_xticks([]); a.set_yticks([])
-plt.tight_layout(); plt.show()
-
-# %% Run evolution (first generation is slow due to JIT compilation)
-from orchestrator import evolve
-best, rec = evolve(cfg)
-rec.dump_json("history.json")
-print("best fitness:", rec.records[-1]["best"]["fitness"])
-print("best test acc:", rec.records[-1].get("accuracy", {}).get("test_best"))
-
-# %% Top-species report (reconstructed from the recorder, so it always prints
-# regardless of what orchestrator version produced the run). For the requested
-# generations it lists, per top species, the BEST genome's fitness, size,
-# structure (hidden / connections / depth) and which activations it uses.
-from collections import Counter
-from recorder import load_genome
 from graph_utils import max_depth
+from genome import HIDDEN
 
-def species_report(gen, top_k=6):
-    r = rec.records[gen]
-    sfit = {int(s): v for s, v in r["species"]["fitness"].items()}     # {sid:{size,mean,max}}
-    snaps = {int(s): g for s, g in rec.species_best_snapshots.get(gen, {}).items()}
-    order = sorted(sfit, key=lambda s: sfit[s]["max"], reverse=True)[:top_k]
-    acc = r.get("accuracy", {})
-    print(f"\n=== gen {gen:>3} | {r['species']['count']} species "
-          f"| pop best fit {r['fitness']['max']:.3f} "
-          f"(train {acc.get('train_best', 0):.3f} / test {acc.get('test_best', 0):.3f}) ===")
-    print(f"{'rank':>4}  {'sp':>4}  {'best fit':>9}  {'size':>4}  "
-          f"{'hid':>3}  {'conn':>4}  {'dep':>3}  activations")
-    for rank, sid in enumerate(order, 1):
-        st = sfit[sid]
-        g = load_genome(snaps[sid])
-        hid = [n for n in g.node_genes.values() if n.type == "hidden"]
-        conns = sum(c.enabled for c in g.conn_genes.values())
-        acts = Counter(n.activation for n in hid)
-        acts_str = ", ".join(f"{a}x{k}" for a, k in acts.most_common()) or "(none)"
-        print(f"{rank:>4}  {sid:>4}  {st['max']:>9.3f}  {st['size']:>4}  "
-              f"{len(hid):>3}  {conns:>4}  {max_depth(g):>3}  {acts_str}")
 
-last = len(rec.records) - 1
-for gi in sorted({0, last // 2, last}):
-    species_report(gi)
+def evolve(config: Config, callback=None):
+    """Run evolution. Returns (best_genome, recorder)."""
+    rng = np.random.default_rng(config.seed)
+    data_rng = np.random.default_rng(config.seed + 1)
 
-# %% Fitness / accuracy / complexity / species over generations
-import matplotlib.pyplot as plt
-g = [r["gen"] for r in rec.records]
-fig, ax = plt.subplots(2, 2, figsize=(12, 8))
-ax[0, 0].plot(g, [r["fitness"]["max"] for r in rec.records], label="max")
-ax[0, 0].plot(g, [r["fitness"]["mean"] for r in rec.records], label="mean")
-ax[0, 0].set_title("fitness"); ax[0, 0].legend()
-ax[0, 1].plot(g, [r.get("accuracy", {}).get("train_best", 0) for r in rec.records], label="train best")
-ax[0, 1].plot(g, [r.get("accuracy", {}).get("test_best", 0) for r in rec.records], label="test best")
-ax[0, 1].set_title("best-genome accuracy"); ax[0, 1].legend()
-ax[1, 0].plot(g, [r["complexity"]["hidden"]["mean"] for r in rec.records], label="hidden")
-ax[1, 0].plot(g, [r["complexity"]["enabled_conns"]["mean"] for r in rec.records], label="conns")
-ax[1, 0].set_title("complexity (pop mean)"); ax[1, 0].legend()
-ax[1, 1].plot(g, [r["species"]["count"] for r in rec.records])
-ax[1, 1].set_title("species count")
-for a in ax.ravel():
-    a.set_xlabel("generation")
-plt.tight_layout(); plt.show()
+    num_inputs, num_outputs = config.num_inputs, config.num_outputs
+    X_train, y_train = make_dataset(config.dataset, config.n_train, data_rng, config.noise)
+    X_test, y_test = make_dataset(config.dataset, config.n_test, data_rng, config.noise)
 
-# %% Activation usage across the population over time
-import numpy as np
-names = list(cfg.activation_names)
-usage = np.array([[r["activations_population"].get(n, 0) for n in names] for r in rec.records])
-plt.figure(figsize=(8, 4))
-plt.stackplot(g, usage.T, labels=names)
-plt.legend(loc="upper left", ncol=4, fontsize=8)
-plt.title("activation usage (population hidden nodes)"); plt.xlabel("generation"); plt.show()
+    names = list(config.activation_names)
+    act_to_id = activation_ids(names)
+    act_fns = activation_fns(names)
 
-# %% Best network topology
-from viz import draw_network
-from IPython.display import Image
-draw_network(best, cfg.num_inputs, cfg.num_outputs, "best_topology.png")
-Image("best_topology.png")
+    registry = InnovationRegistry(num_inputs, num_outputs)
+    pop = init_population(
+        config.pop_size, num_inputs, num_outputs, rng,
+        weight_init_std=config.weight_init_std,
+        output_activation=config.output_activation,
+    )
 
-# %% Decision boundary of the best network (re-generate the same test set to overlay)
-from dataset import make_dataset
-from converter import activation_ids
-from viz import decision_boundary
-data_rng = np.random.default_rng(cfg.seed + 1)
-_ = make_dataset(cfg.dataset, cfg.n_train, data_rng, cfg.noise)   # advance rng to match training
-Xte, yte = make_dataset(cfg.dataset, cfg.n_test, data_rng, cfg.noise)
-decision_boundary(best, cfg.num_inputs, cfg.num_outputs, cfg.n_max,
-                  activation_ids(names), names, cfg.num_passes,
-                  Xte, yte, "best_boundary.png")
-Image("best_boundary.png")
+    representatives: dict[int, object] = {}
+    best_genome, best_fitness = None, -np.inf
+    recorder = Recorder()
+    stagnation = StagnationTracker(config.max_stagnation, config.population_stall)
 
-# %% Topology at several generations (complexification story)
-from recorder import load_genome
-for gi in [0, cfg.num_generations // 2, cfg.num_generations - 1]:
-    if gi in rec.best_snapshots:
-        draw_network(load_genome(rec.best_snapshots[gi]),
-                     cfg.num_inputs, cfg.num_outputs, f"topo_gen{gi}.png")
+    for gen in range(config.num_generations):
+        t0 = time.time()
+
+        # --- Express, train (backprop), score ---
+        W, static = stack_models(
+            [express(g, num_inputs, num_outputs, config.n_max, act_to_id) for g in pop]
+        )
+        fitnesses, W_trained, train_acc, test_acc, _bce, _conns = train_and_score(
+            W, static, X_train, y_train, X_test, y_test, act_fns,
+            num_passes=config.num_passes,
+            steps=config.backprop_steps,
+            lr=config.learning_rate,
+            penalty_conn=config.penalty_conn,
+            penalty_node=config.penalty_node,
+        )
+
+        # --- Lamarckian write-back: trained weights persist into the genomes ---
+        for g, Wg in zip(pop, W_trained):
+            write_back(g, Wg, num_inputs, num_outputs, config.n_max)
+
+        gen_best = int(np.argmax(fitnesses))
+        if fitnesses[gen_best] > best_fitness:
+            best_fitness = float(fitnesses[gen_best])
+            best_genome = pop[gen_best].copy()
+
+        # --- Speciate ---
+        assignment, representatives = speciate(
+            pop, representatives, rng,
+            threshold=config.compat_threshold,
+            c_unmatched=config.c_unmatched,
+            c_weight=config.c_weight,
+            normalize_threshold=config.normalize_threshold,
+            rep_selection=config.rep_selection,
+        )
+
+        rec = recorder.record(gen, pop, fitnesses, assignment,
+                              train_acc=train_acc, test_acc=test_acc,
+                              gen_time=time.time() - t0)
+        if callback is not None:
+            callback(rec)
+        elif config.verbose:
+            acc = rec.get("accuracy", {})
+            sp, cx, b = rec["species"], rec["complexity"], rec["best"]
+            if gen == 0:
+                print(f"[{config.dataset}]  "
+                      "gen |    fit max    mean |  acc best tr/te | mean te | "
+                      "species (new/ext,max) | best h/c/d | pop h/c | stag |  time")
+            print(
+                f"      {rec['gen']:4d} | "
+                f"{rec['fitness']['max']:8.3f} {rec['fitness']['mean']:7.3f} | "
+                f"     {acc.get('train_best', 0):.2f}/{acc.get('test_best', 0):.2f} | "
+                f"  {acc.get('test_mean', 0):.2f} | "
+                f"{sp['count']:5d} (+{sp['new']} -{sp['extinct']}, {sp['largest']:>2}) | "
+                f"{b['hidden']:3d}/{b['enabled_conns']:3d}/{b['depth']:2d} | "
+                f"{cx['hidden']['mean']:4.1f}/{cx['enabled_conns']['mean']:5.1f} | "
+                f"{rec['stagnation']:4d} | "
+                f"{rec['gen_time_s']:5.1f}s"
+            )
+            if config.print_top_species:
+                members: dict[int, list[int]] = {}
+                for i, s in enumerate(assignment):
+                    members.setdefault(s, []).append(i)
+                top = sorted(members,
+                             key=lambda s: max(fitnesses[i] for i in members[s]),
+                             reverse=True)[:config.print_top_species]
+                for s in top:
+                    bi = max(members[s], key=lambda i: fitnesses[i])
+                    g = pop[bi]
+                    h = sum(1 for n in g.node_genes.values() if n.type == HIDDEN)
+                    c = sum(1 for cc in g.conn_genes.values() if cc.enabled)
+                    acts = Counter(n.activation for n in g.node_genes.values()
+                                   if n.type == HIDDEN)
+                    acts_str = " ".join(f"{a}:{k}" for a, k in acts.most_common()) or "-"
+                    print(f"           sp {s:>3}: fit {fitnesses[bi]:8.3f} "
+                          f"size {len(members[s]):3d} | h {h:2d} c {c:3d} d {max_depth(g):2d} "
+                          f"| {acts_str}")
+
+        # --- Reproduce ---
+        allowed = stagnation.update(gen, assignment, fitnesses)
+        registry.new_generation()
+        crossover_fn = lambda p1, p2, f1, f2: crossover(
+            p1, p2, f1, f2, rng, config.reenable_prob, config.inherit_from_fitter_prob
+        )
+        mutate_fn = lambda g: mutate(
+            g, rng, registry,
+            n_max=config.n_max,
+            weight_init_std=config.weight_init_std,
+            p_weight=config.p_weight,
+            perturb_std=config.perturb_std,
+            replace_prob=config.replace_prob,
+            p_add_connection=config.p_add_connection,
+            p_add_node=config.p_add_node,
+            p_activation=config.p_activation,
+            activation_names=names,
+            add_conn_max_tries=config.add_conn_max_tries,
+            new_node_activation=config.new_node_activation,
+        )
+        pop = reproduce(
+            pop, fitnesses, assignment, rng,
+            pop_size=config.pop_size,
+            survival_threshold=config.survival_threshold,
+            elitism_min_species_size=config.elitism_min_species_size,
+            mutate_only_prob=config.mutate_only_prob,
+            parent_selection=config.parent_selection,
+            interspecies_mating_prob=config.interspecies_mating_prob,
+            crossover_fn=crossover_fn,
+            mutate_fn=mutate_fn,
+            allowed_species=allowed,
+        )
+
+    return best_genome, recorder
