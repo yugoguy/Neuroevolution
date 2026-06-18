@@ -164,27 +164,3 @@ ax.set_yticks(range(len(sids))); ax.set_yticklabels([f"sp {s}" for s in sids])
 ax.set_xlabel("generation"); ax.set_title("species timeline (color = best fitness, size = members)")
 fig.colorbar(sc, ax=ax, label="best fitness")
 plt.tight_layout(); plt.show()
-
-# # %% Interactive explorer: pick a species + generation -> its best network + stats
-# import ipywidgets as widgets
-# from IPython.display import Image, display
-# from recorder import load_genome
-# from viz import draw_network
-
-# def explore(species_id, generation):
-#     snap = rec.species_best_snapshots.get(generation, {})
-#     if species_id not in snap:
-#         print(f"species {species_id} did not exist at generation {generation}")
-#         return
-#     st = records[generation]["species"]["fitness"][species_id]
-#     print(f"species {species_id} @ gen {generation} — "
-#           f"size {st['size']}, best {st['max']:.2f}, mean {st['mean']:.2f}")
-#     draw_network(load_genome(snap[species_id]), cfg.num_inputs, cfg.num_outputs, "sp_best.png")
-#     display(Image("sp_best.png"))
-
-# widgets.interact(
-#     explore,
-#     species_id=widgets.Dropdown(options=sids, description="species"),
-#     generation=widgets.IntSlider(min=0, max=len(records) - 1, step=1, value=len(records) - 1,
-#                                  description="gen"),
-# )
